@@ -10,6 +10,6 @@
 
 ### 2. 动作识别
 
-![dfa1](.\doc_img\dfa1.png)
+![dfa1](./doc_img/dfa1.png)
 
-![dfa2](.\doc_img\dfa2.png)
+![dfa2](./doc_img/dfa2.png)
