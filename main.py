@@ -6,13 +6,15 @@ import sys
 import numpy as np
 import cv2
 from rknn.api import RKNN
-import os
+import copy
+from pose_estimator import PoseEstimator
+from skeleton_render import SkeletonRender
 
-ONNX_MODEL = 'yolov5s.onnx'
-RKNN_MODEL = 'yolov5s.rknn'
-IMG_PATH = 'bus.jpg'
+YOLO_ONNX_MODEL = 'yolov5s.onnx'
+MEDIAPIPE_TFLITE_MODEL =  'pose_landmark_full.tflite'
 IMG_PATH = os.path.join(os.environ['HOME'], 'pic/5-0-1.png')
-DATASET = './dataset_yolo.txt'
+YOLO_DATASET = './dataset_yolo.txt'
+MEDIAPIPE_DATASET = './dataset_mediapipe.txt'
 
 QUANTIZE_ON = True
 
@@ -200,39 +202,6 @@ def yolov5_post_process(input_data):
     return boxes, classes, scores
 
 
-def draw(image, boxes, scores, classes):
-    """Draw the boxes on the image.
-
-    # Argument:
-        image: original image.
-        boxes: ndarray, boxes of objects.
-        classes: ndarray, classes of objects.
-        scores: ndarray, scores of objects.
-        all_classes: all classes name.
-    """
-    for box, score, cl in zip(boxes, scores, classes):
-        if cl != 0:
-            continue
-
-        top, left, right, bottom = box
-        top -= EXTRA_PIXEL
-        left -= EXTRA_PIXEL
-        right += EXTRA_PIXEL
-        bottom += EXTRA_PIXEL
-
-        print('class: {}, score: {}'.format(CLASSES[cl], score))
-        print('box coordinate left,top,right,down: [{}, {}, {}, {}]'.format(top, left, right, bottom))
-        top = int(top)
-        left = int(left)
-        right = int(right)
-        bottom = int(bottom)
-
-        cv2.rectangle(image, (top, left), (right, bottom), (255, 0, 0), 2)
-        cv2.putText(image, '{0} {1:.2f}'.format(CLASSES[cl], score),
-                    (top, left - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6, (0, 0, 255), 2)
-
 
 def get_crop_img(img, boxes, scores, classes):
     for box, score, cl in zip(boxes, scores, classes):
@@ -257,64 +226,45 @@ def get_crop_img(img, boxes, scores, classes):
         return img[left:bottom, top:right]
 
 
-def letterbox(im, new_shape=(640, 640), color=(0, 0, 0)):
-    # Resize and pad image while meeting stride-multiple constraints
-    shape = im.shape[:2]  # current shape [height, width]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
-
-    # Scale ratio (new / old)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-
-    # Compute padding
-    ratio = r, r  # width, height ratios
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
-
-    dw /= 2  # divide padding into 2 sides
-    dh /= 2
-
-    if shape[::-1] != new_unpad:  # resize
-        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
-    return im, ratio, (dw, dh)
-
 
 if __name__ == '__main__':
 
     # Create RKNN object
     rknn = RKNN(verbose=True)
-
+    rknn2 = RKNN(verbose=True)
+    
     # pre-process config
     print('--> Config model')
     rknn.config(mean_values=[[0, 0, 0]], std_values=[[255, 255, 255]], target_platform='rk3588')
+    rknn2.config(mean_values=[0, 0, 0], std_values=[1, 1, 1], target_platform='rk3588')
     print('done')
 
     # Load ONNX model
     print('--> Loading model')
-    ret = rknn.load_onnx(model=ONNX_MODEL)
-    if ret != 0:
+    ret = rknn.load_onnx(model=YOLO_ONNX_MODEL)
+    ret2 = rknn2.load_tflite(model=MEDIAPIPE_TFLITE_MODEL)
+    if ret != 0 or ret2 != 0:
         print('Load model failed!')
-        exit(ret)
+        exit(1)
     print('done')
 
     # Build model
     print('--> Building model')
-    ret = rknn.build(do_quantization=QUANTIZE_ON, dataset=DATASET)
-    if ret != 0:
+    ret = rknn.build(do_quantization=QUANTIZE_ON, dataset=YOLO_DATASET)
+    ret2 = rknn2.build(do_quantization=False, dataset=MEDIAPIPE_DATASET)
+    if ret != 0 or ret2 != 0:
         print('Build model failed!')
-        exit(ret)
+        exit(2)
     print('done')
 
     # Init runtime environment
     print('--> Init runtime environment')
     ret = rknn.init_runtime()
+    ret2 = rknn2.init_runtime()
     # ret = rknn.init_runtime('rk3566')
-    if ret != 0:
+    if ret != 0 or ret2 != 0:
         print('Init runtime environment failed!')
-        exit(ret)
+        exit(3)
     print('done')
 
     # Set inputs
@@ -327,7 +277,6 @@ if __name__ == '__main__':
     # Inference
     print('--> Running model')
     outputs = rknn.inference(inputs=[img])
-    print('done')
 
     # post process
     input0_data = outputs[0]
@@ -345,16 +294,23 @@ if __name__ == '__main__':
 
     boxes, classes, scores = yolov5_post_process(input_data)
 
-    img_1 = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    paddingImg = cv2.cvtColor(paddingImg, cv2.COLOR_RGB2BGR)
     if boxes is not None:
         # draw(paddingImg, boxes * (paddingImg.shape[0] / IMG_SIZE), scores, classes)
         cropImg = get_crop_img(paddingImg, boxes * (paddingImg.shape[0] / IMG_SIZE), scores, classes)
+     
+    
     # show output
-    cv2.imshow("cropImg", cropImg)
-    # cv2.namedWindow("oriImg", cv2.WINDOW_NORMAL)
-    # cv2.imshow('oriImg', paddingImg)
+    # cv2.imshow("cropImg", cropImg)
+    pose_estimator = PoseEstimator(rknn2)
+    points = pose_estimator.process(cropImg)
+    sk_render = SkeletonRender()
+    render_img = sk_render.render(image=oriImg, points=points, zero_point=(0, 0))
+    cv2.namedWindow("oriImg", cv2.WINDOW_NORMAL)
+    cv2.imshow('oriImg', oriImg)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+    
 
     rknn.release()
-
+    rknn2.release()

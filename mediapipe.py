@@ -6,7 +6,7 @@ from skeleton_render import SkeletonRender
 import copy
 import os
 
-IMG_PATH = os.path.join(os.environ['HOME'], './pic/5-0-4.png')
+IMG_PATH = "cropImg.jpg"
 
 def show_outputs(outputs):
     print(len(outputs))
