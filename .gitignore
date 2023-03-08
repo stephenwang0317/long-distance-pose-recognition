@@ -1,5 +1,2 @@
-*.onnx
-*.tflite
 *.rknn
-*.jpg
-
+*.mp4
